@@ -11,6 +11,10 @@ const DEFAULT_SETTINGS = {
   ringGap: 4,                 // extra radius beyond the node (graph units)
   ringWidth: 4,               // ring stroke thickness (graph units)
   labelScale: 1,              // size multiplier for matching node titles (1 = no change)
+  glow: true,                 // soft multi-layer glow ring instead of a crisp stroke
+  pulse: true,                // gently animate the ring (breathing)
+  dimNonMatches: true,        // fade non-matching nodes/labels so matches pop
+  dimOpacity: 0.15,           // opacity of dimmed (non-matching) nodes
 };
 
 module.exports = class GraphTypeToSearch extends Plugin {
@@ -228,22 +232,37 @@ module.exports = class GraphTypeToSearch extends Plugin {
     return w ? w / 2 : 8;
   }
 
+  strokeCircle(g, r, w, color, alpha) {
+    if (this._hasV8) {
+      g.circle(0, 0, r).stroke({ width: w, color, alpha });
+    } else {
+      g.lineStyle(w, color, alpha);
+      g.drawCircle(0, 0, r);
+    }
+  }
+
   // Hollow ring (no fill) sized just outside the node, so even tiny nodes stay
-  // visible through it and node colors / color groups are untouched.
-  drawRing(g, R) {
+  // visible through it and node colors / color groups are untouched. With glow
+  // on, faint wider rings are layered outside a bright inner ring; `bright`
+  // (0..1, driven by the pulse) modulates overall opacity.
+  drawRing(g, R, bright) {
     const color = this.ringColorInt();
     const w = this.settings.ringWidth;
     g.clear();
-    if (this._hasV8) {
-      g.circle(0, 0, R).stroke({ width: w, color, alpha: 1 });
-    } else {
-      g.lineStyle(w, color, 1);
-      g.drawCircle(0, 0, R);
+
+    if (!this.settings.glow) {
+      this.strokeCircle(g, R, w, color, bright);
+      return;
     }
+
+    this.strokeCircle(g, R + w * 2, w, color, 0.12 * bright);
+    this.strokeCircle(g, R + w, w, color, 0.28 * bright);
+    this.strokeCircle(g, R, w, color, 0.95 * bright);
   }
 
   syncRings() {
     try {
+      this._phase = (this._phase || 0) + 0.09;   // advances the pulse once per frame
       for (const [view, state] of this.states) {
         const renderer = view.renderer;
         const hanger = renderer && renderer.hanger;
@@ -281,6 +300,11 @@ module.exports = class GraphTypeToSearch extends Plugin {
         // only recomputes it on zoom).
         const scale = this.settings.labelScale;
 
+        // Pulse: a 0..1 breathing factor (1 when pulse is off, so rings draw at
+        // full strength and only redraw when geometry changes).
+        const pulse = this.settings.pulse && !!q;
+        const bright = pulse ? 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(this._phase)) : 1;
+
         const active = new Set();
         let changed = false;
 
@@ -302,9 +326,10 @@ module.exports = class GraphTypeToSearch extends Plugin {
             g._node = node;
             g.position.set(node.x, node.y);
             const R = this.nodeRadius(node) + this.settings.ringGap;
-            if (g._r !== R) {
-              this.drawRing(g, R);
+            if (g._r !== R || pulse) {   // pulse redraws every frame for the breathing alpha
+              this.drawRing(g, R, bright);
               g._r = R;
+              changed = changed || pulse;
             }
             if (scale !== 1 && node.text && node.text.style) {
               const t = node.text;
@@ -324,6 +349,18 @@ module.exports = class GraphTypeToSearch extends Plugin {
             }
             active.add(node.id);
           }
+        }
+
+        // Spotlight: fade non-matching nodes/labels so the matches stand out.
+        if (q && this.settings.dimNonMatches) {
+          const dim = this.settings.dimOpacity;
+          for (const node of list) {
+            if (node && this.setNodeAlpha(node, matches(node) ? 1 : dim)) {
+              changed = true;
+            }
+          }
+        } else if (this.restoreDim(view)) {
+          changed = true;
         }
 
         for (const [id, g] of layer.rings) {
@@ -359,6 +396,40 @@ module.exports = class GraphTypeToSearch extends Plugin {
     node.fontDirty = true;
     delete text._gttsFont;
     delete text._gttsNatural;
+  }
+
+  // Set a node's circle + label opacity (persists — the renderer doesn't
+  // overwrite these, unlike fadeAlpha). Returns true if anything changed.
+  setNodeAlpha(node, a) {
+    let changed = false;
+    // The node circle is drawn from node.color.a in the renderer's batched mesh
+    // (its Graphics.alpha / fadeAlpha don't affect the draw). The label is a real
+    // Text object, so its own alpha works.
+    if (node.color && node.color.a !== a) {
+      node.color.a = a;
+      changed = true;
+    }
+    if (node.text && node.text.alpha !== a) {
+      node.text.alpha = a;
+      changed = true;
+    }
+    if (a < 1) {
+      node._gttsDimmed = true;
+    } else {
+      delete node._gttsDimmed;
+    }
+    return changed;
+  }
+
+  // Restore full opacity to every node we dimmed. Returns true if anything changed.
+  restoreDim(view) {
+    let changed = false;
+    for (const node of this.nodeList(view.renderer)) {
+      if (node && node._gttsDimmed && this.setNodeAlpha(node, 1)) {
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   // Reset every enlarged label (used when the size multiplier returns to 1).
@@ -400,6 +471,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
       if (g.destroy) g.destroy();
     }
     layer.rings.clear();
+    this.restoreDim(view);
     if (layer.renderer && layer.renderer.changed) layer.renderer.changed();
     this.layers.delete(view);
   }
@@ -468,6 +540,54 @@ class GTTSSettingTab extends PluginSettingTab {
           if (v === 1) {
             this.plugin.resetAllScales();
           }
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Soft glow")
+      .setDesc("Draw the ring as a soft glow (layered) instead of a crisp stroke.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.glow).onChange(async (v) => {
+          this.plugin.settings.glow = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Pulse")
+      .setDesc("Gently animate the ring so matches breathe.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.pulse).onChange(async (v) => {
+          this.plugin.settings.pulse = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Dim non-matches")
+      .setDesc("Fade non-matching nodes so the matches stand out (spotlight).")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.dimNonMatches).onChange(async (v) => {
+          this.plugin.settings.dimNonMatches = v;
+          await this.plugin.saveData(this.plugin.settings);
+          if (!v) {
+            for (const view of this.plugin.states.keys()) {
+              this.plugin.restoreDim(view);
+              if (view.renderer && view.renderer.changed) view.renderer.changed();
+            }
+          }
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Dim strength")
+      .setDesc("Opacity of dimmed (non-matching) nodes — lower is dimmer.")
+      .addSlider((s) =>
+        s.setLimits(0.05, 0.6, 0.05).setValue(this.plugin.settings.dimOpacity).setDynamicTooltip().onChange(async (v) => {
+          this.plugin.settings.dimOpacity = v;
+          await this.plugin.saveData(this.plugin.settings);
         })
       );
 

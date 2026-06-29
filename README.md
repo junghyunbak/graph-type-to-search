@@ -12,7 +12,7 @@ Obsidian's built-in graph search filters live as you type, but only *after* you 
 
 While a graph (or local graph) pane is active, the plugin shows a small **bar pinned to the top-left** and keeps it focused for you. Just start typing — anything you enter (including **IME composition for Hangul / CJK**, Backspace, and text selection) goes natively into the bar.
 
-As the query changes, the plugin draws a **hollow highlight ring** around every node whose **title contains the query**. The ring is drawn into the graph's own renderer (the same approach as the *Graph Unread Highlight* plugin), so it tracks pan, zoom and the simulation automatically, sits just outside each node, and never changes node colors or color groups.
+As the query changes, the plugin draws a **soft glow ring** around every node whose **title contains the query** (optionally pulsing), enlarges their titles if you like, and **dims the non-matching nodes** so the matches pop — a spotlight effect. The ring is drawn into the graph's own renderer (the same approach as the *Graph Unread Highlight* plugin), so it tracks pan, zoom and the simulation automatically and sits just outside each node.
 
 By default the entire graph **stays on screen** and only the matches are ringed, so you keep the surrounding context. Turn off **Keep all nodes visible** to instead push the query into the graph's built-in search, **hiding non-matching nodes** (the surviving matches keep their ring).
 
@@ -24,6 +24,10 @@ Using a real, focused, **visible** input is what makes **Korean and other IME in
 - **Ring gap** — how far the ring sits outside the node.
 - **Ring thickness** — width of the ring stroke.
 - **Highlighted label size** — size multiplier for matching node titles (1.0 = no change).
+- **Soft glow** — draw the ring as a layered glow instead of a crisp stroke (on by default).
+- **Pulse** — gently animate the ring so matches breathe (on by default).
+- **Dim non-matches** — fade non-matching nodes so the matches stand out, spotlight-style (on by default).
+- **Dim strength** — opacity of the dimmed non-matching nodes.
 - **Keep all nodes visible** — don't hide non-matching nodes; keep the whole graph and only ring the matches (on by default). Turn off to filter the graph as you type instead.
 - **Enable in local graph** — also show the bar and highlight in the local graph pane (on by default).
 
