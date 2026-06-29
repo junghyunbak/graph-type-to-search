@@ -52,9 +52,10 @@ module.exports = class GraphTypeToSearch extends Plugin {
 
     // Intercept Cmd/Ctrl+F via Obsidian's keymap. A scope pushed onto the top of
     // the keymap stack is consulted before the core "search" hotkey, so we can
-    // block it (return false) and focus our bar instead. We only keep the scope
-    // pushed while a graph pane is active.
-    this._scope = new Scope();
+    // block it (return false) and focus our bar instead. The app's root scope is
+    // its parent so any other hotkey (Cmd+,, etc.) still falls through normally.
+    // We only keep the scope pushed while a graph pane is active.
+    this._scope = new Scope(this.app.scope);
     this._scope.register(["Mod"], "f", () => {
       const view = this.activeGraphView();
       if (view) {
