@@ -6,13 +6,13 @@ const GRAPH_VIEW_TYPES = ["graph", "localgraph"];
 
 const DEFAULT_SETTINGS = {
   enableInLocalGraph: true,   // also activate type-ahead in the local graph pane
-  showQueryDisplay: true,     // show the current search query in the graph's top-left
 };
 
 module.exports = class GraphTypeToSearch extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.states = new Map();   // graph view -> { realInput, proxy, displayEl, onRealInput, onProxyInput }
+    this.states = new Map();   // graph view -> { realInput, bar, onRealInput, onBarInput }
+    this._mirroring = false;   // guards the bar <-> real-input echo loop
 
     this.addSettingTab(new GTTSSettingTab(this.app, this));
 
@@ -30,8 +30,8 @@ module.exports = class GraphTypeToSearch extends Plugin {
       })
     );
 
-    // After any interaction inside the graph (panning, clicking a node), hand
-    // keyboard focus back to the proxy so the next keystroke types into search.
+    // After panning or clicking a node, hand keyboard focus back to the bar so
+    // the next keystroke types into search.
     this.registerDomEvent(document, "pointerup", (evt) => this.onPointerUp(evt));
 
     this.register(() => this.cleanupAll());
@@ -73,25 +73,25 @@ module.exports = class GraphTypeToSearch extends Plugin {
 
   // ----- focus handling -----
 
-  // Keep the proxy focused while a graph is active so the OS IME composes into
-  // a real, focused input (Hangul/CJK can't be composed by injecting keys).
+  // Keep the bar focused while a graph is active so the OS IME composes into a
+  // real, focused, *visible* input (a hidden host would draw the composition
+  // caret at its off-screen corner instead of where the text is).
   focusActiveGraph() {
     const activeLeaf = this.app.workspace.activeLeaf;
     if (!activeLeaf || !this.activeTypes().includes(activeLeaf.view.getViewType())) {
       return;
     }
 
-    this.focusProxy(activeLeaf.view);
+    this.focusBar(activeLeaf.view);
   }
 
-  focusProxy(view) {
+  focusBar(view) {
     const state = this.states.get(view);
     if (!state) {
       return;
     }
 
-    state.proxy.value = state.realInput.value;   // resync after edits made elsewhere
-    state.proxy.focus({ preventScroll: true });
+    state.bar.focus({ preventScroll: true });
   }
 
   onPointerUp(evt) {
@@ -99,11 +99,13 @@ module.exports = class GraphTypeToSearch extends Plugin {
     if (!view || !this.activeTypes().includes(view.getViewType())) {
       return;
     }
-    if (evt.target.closest && evt.target.closest(".graph-controls")) {   // let the real controls take focus
+    // Leave focus alone when the user is interacting with the bar itself or the
+    // graph's own controls (so caret placement and the real search box work).
+    if (evt.target.closest && evt.target.closest(".gtts-bar, .graph-controls")) {
       return;
     }
 
-    this.focusProxy(view);
+    this.focusBar(view);
   }
 
   // ----- per-leaf wiring -----
@@ -134,29 +136,31 @@ module.exports = class GraphTypeToSearch extends Plugin {
       return;
     }
 
-    // Hidden, focusable input that hosts native (IME) text entry.
-    const proxy = view.containerEl.createEl("input", { cls: "gtts-proxy", type: "text" });
-    proxy.setAttribute("aria-hidden", "true");
-    proxy.tabIndex = -1;
+    // Visible, focusable filter bar pinned to the top-left. Hosts native text
+    // entry (including IME composition) and shows the current query.
+    const bar = view.containerEl.createEl("input", { cls: "gtts-bar", type: "text" });
+    bar.placeholder = "Type to filter…";
 
-    const onProxyInput = () => {
-      realInput.value = proxy.value;
+    const onBarInput = () => {
+      this._mirroring = true;
+      realInput.value = bar.value;
       realInput.dispatchEvent(new Event("input"));   // drives the graph's live filter
+      this._mirroring = false;
     };
-    proxy.addEventListener("input", onProxyInput);
+    bar.addEventListener("input", onBarInput);
 
-    const displayEl = this.settings.showQueryDisplay
-      ? view.containerEl.createDiv({ cls: "gtts-query-display" })
-      : null;
+    // Reflect changes made elsewhere (clear button, typing in the real box)
+    // back into the bar — but never while we are the source of the change.
     const onRealInput = () => {
-      if (displayEl) {
-        this.renderDisplay(displayEl, realInput.value);
+      if (this._mirroring || bar.value === realInput.value) {
+        return;
       }
+      bar.value = realInput.value;
     };
     realInput.addEventListener("input", onRealInput);
 
-    this.states.set(view, { realInput, proxy, displayEl, onRealInput, onProxyInput });
-    onRealInput();
+    this.states.set(view, { realInput, bar, onRealInput, onBarInput });
+    bar.value = realInput.value;
   }
 
   unpatchLeaf(view) {
@@ -165,27 +169,11 @@ module.exports = class GraphTypeToSearch extends Plugin {
       return;
     }
 
-    state.proxy.removeEventListener("input", state.onProxyInput);
+    state.bar.removeEventListener("input", state.onBarInput);
     state.realInput.removeEventListener("input", state.onRealInput);
-    state.proxy.remove();
-    if (state.displayEl) {
-      state.displayEl.remove();
-    }
+    state.bar.remove();
 
     this.states.delete(view);
-  }
-
-  renderDisplay(el, value) {
-    el.setText(value || "");
-    el.toggleClass("is-empty", !value);
-  }
-
-  refresh() {
-    for (const view of Array.from(this.states.keys())) {
-      this.unpatchLeaf(view);
-    }
-    this.patchAllGraphLeaves();
-    this.focusActiveGraph();
   }
 
   cleanupAll() {
@@ -207,22 +195,11 @@ class GTTSSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Enable in local graph")
-      .setDesc("Also start type-ahead search when the local graph pane is focused.")
+      .setDesc("Also show the filter bar and keep it focused in the local graph pane.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.enableInLocalGraph).onChange(async (v) => {
           this.plugin.settings.enableInLocalGraph = v;
           await this.plugin.saveData(this.plugin.settings);
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Show current query")
-      .setDesc("Display the active search query in the top-left corner of the graph.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.showQueryDisplay).onChange(async (v) => {
-          this.plugin.settings.showQueryDisplay = v;
-          await this.plugin.saveData(this.plugin.settings);
-          this.plugin.refresh();
         })
       );
   }

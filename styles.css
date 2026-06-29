@@ -1,44 +1,29 @@
-/* Focusable host for native (IME) text entry. Kept visually hidden but NOT
-   display:none / visibility:hidden, so it can hold focus and compose text. */
-.gtts-proxy {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* Current-query indicator pinned to the graph's top-left corner. */
-.gtts-query-display {
+/* Always-present filter bar pinned to the graph's top-left corner. It is a
+   real, visible, focusable input so native (IME) composition shows its caret
+   and in-progress text right here, where the query lives. */
+.gtts-bar {
   position: absolute;
   top: 8px;
   left: 8px;
   z-index: 10;
+  width: 180px;
   max-width: 60%;
-  padding: 3px 9px;
+  padding: 4px 9px;
   font-size: 12px;
   line-height: 1.4;
   border-radius: 6px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   color: var(--text-normal);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  opacity: 0.9;
+  opacity: 0.85;
 }
 
-.gtts-query-display::before {
-  content: "🔍 ";
-  opacity: 0.7;
+.gtts-bar:hover {
+  opacity: 1;
 }
 
-/* Hidden while there is no active query. */
-.gtts-query-display.is-empty {
-  display: none;
+.gtts-bar:focus {
+  opacity: 1;
+  outline: none;
+  border-color: var(--interactive-accent);
 }

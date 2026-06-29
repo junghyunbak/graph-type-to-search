@@ -10,18 +10,15 @@ This plugin removes that step. While a graph pane is focused, the first printabl
 
 ## How it works
 
-While a graph (or local graph) pane is active, the plugin keeps a tiny **hidden, focusable input** focused for you. Anything you type — including **IME composition for Hangul / CJK**, Backspace, and text selection — is entered natively into that input, and its value is mirrored into the graph's built-in **"Search files…"** query, firing the input event so the graph's normal **live filter** kicks in.
+While a graph (or local graph) pane is active, the plugin shows a small **filter bar pinned to the top-left** and keeps it focused for you. Just start typing — anything you enter (including **IME composition for Hangul / CJK**, Backspace, and text selection) goes natively into the bar, and its value is mirrored into the graph's built-in **"Search files…"** query so the graph's normal **live filter** kicks in.
 
-Using a real focused input (rather than injecting individual keystrokes) is what makes **Korean and other IME input compose correctly** — you can't redirect a composition that began while another element had focus, so the host input must already be focused before you type. It also means the search box itself never needs to be focusable, so this keeps working with the graph **controls panel collapsed**. After you pan or click in the graph, focus is handed back to the hidden input on pointer-up so the next keystroke goes straight to search.
+Using a real, focused, **visible** input is what makes **Korean and other IME input compose correctly**: you can't redirect a composition that began while another element had focus, and a hidden host would draw the composition caret at its off-screen corner instead of where the text is. After you pan or click in the graph, focus is handed back to the bar on pointer-up so the next keystroke goes straight to search.
 
-It mirrors into the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched.
-
-The active query is also shown in a small pill in the **top-left** of the graph, so you can see what's filtering the view at a glance — even with the controls panel collapsed.
+It mirrors into the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched. Because the bar is its own input, this also works with the graph **controls panel collapsed**, and the bar always shows the current query at a glance.
 
 ## Settings
 
-- **Enable in local graph** — also start type-ahead search when the local graph pane is focused (on by default).
-- **Show current query** — display the active search query in the top-left corner of the graph (on by default).
+- **Enable in local graph** — also show the filter bar and keep it focused in the local graph pane (on by default).
 
 ## Notes
 
