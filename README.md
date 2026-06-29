@@ -18,6 +18,8 @@ By default the entire graph **stays on screen** and only the matches are ringed,
 
 Using a real, focused, **visible** input is what makes **Korean and other IME input compose correctly**: you can't redirect a composition that began while another element had focus, and a hidden host would draw the composition caret at its off-screen corner instead of where the text is. After you pan or click in the graph, focus is handed back to the bar on pointer-up so the next keystroke goes straight into the query.
 
+To clear the query, press `Esc` or click the **×** button at the right edge of the bar. By default `Cmd/Ctrl+F` is also intercepted while a graph pane is active so it focuses this bar instead of opening Obsidian's native search (this can be turned off in settings).
+
 ## Settings
 
 - **Ring color** — color of the highlight ring (color picker; defaults to a vivid pink).
@@ -29,6 +31,7 @@ Using a real, focused, **visible** input is what makes **Korean and other IME in
 - **Dim non-matches** — fade non-matching nodes so the matches stand out, spotlight-style (on by default).
 - **Dim strength** — opacity of the dimmed non-matching nodes.
 - **Keep all nodes visible** — don't hide non-matching nodes; keep the whole graph and only ring the matches (on by default). Turn off to filter the graph as you type instead.
+- **Intercept Cmd/Ctrl+F** — while a graph pane is active, capture `Cmd/Ctrl+F` to focus this bar instead of opening Obsidian's native search (on by default).
 - **Enable in local graph** — also show the bar and highlight in the local graph pane (on by default).
 
 ## Notes
