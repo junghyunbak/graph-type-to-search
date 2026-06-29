@@ -3,23 +3,28 @@
 const { Plugin, PluginSettingTab, Setting } = require("obsidian");
 
 const GRAPH_VIEW_TYPES = ["graph", "localgraph"];
-const NO_TINT = 0xffffff;
 
 const DEFAULT_SETTINGS = {
-  enableInLocalGraph: true,   // also show the highlight bar in the local graph pane
-  highlightColor: "#ff5582",  // tint applied to matching node titles
+  enableInLocalGraph: true,   // also show the bar in the local graph pane
+  keepNodesVisible: false,    // when true, don't filter — keep every node and only ring matches
+  ringColor: "#ff5582",       // color of the highlight ring on matching nodes
+  ringGap: 4,                 // extra radius beyond the node (graph units)
+  ringWidth: 4,               // ring stroke thickness (graph units)
 };
 
 module.exports = class GraphTypeToSearch extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.states = new Map();   // graph view -> { bar, query, onBarInput }
+    this.states = new Map();   // graph view -> { bar, q, onBarInput }
+    this.layers = new Map();   // graph view -> { renderer, hanger, rings: Map(id -> Graphics) }
+    this._raf = 0;
 
     this.addSettingTab(new GTTSSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(() => {
       this.patchAllGraphLeaves();
       this.focusActiveGraph();
+      this.startLoop();
     });
     this.registerEvent(
       this.app.workspace.on("layout-change", () => this.patchAllGraphLeaves())
@@ -31,13 +36,8 @@ module.exports = class GraphTypeToSearch extends Plugin {
       })
     );
 
-    // After panning or clicking a node, hand keyboard focus back to the bar so
-    // the next keystroke types into the highlight query.
+    // After panning or clicking a node, hand keyboard focus back to the bar.
     this.registerDomEvent(document, "pointerup", (evt) => this.onPointerUp(evt));
-
-    // Re-apply the tint periodically so labels that appear on zoom-in (and new
-    // nodes) get highlighted too. Cheap: it only repaints when a tint changes.
-    this.registerInterval(window.setInterval(() => this.tick(), 150));
 
     this.register(() => this.cleanupAll());
   }
@@ -46,7 +46,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
     this.cleanupAll();
   }
 
-  // ----- view lookup -----
+  // ----- view lookup / helpers -----
 
   containerViewFor(target) {
     if (!target) {
@@ -67,9 +67,13 @@ module.exports = class GraphTypeToSearch extends Plugin {
     return this.settings.enableInLocalGraph ? GRAPH_VIEW_TYPES : ["graph"];
   }
 
-  colorInt() {
-    const n = parseInt(String(this.settings.highlightColor).replace("#", ""), 16);
-    return Number.isNaN(n) ? 0xff5582 : n;
+  searchInputOf(view) {
+    const search = view.dataEngine && view.dataEngine.filterOptions && view.dataEngine.filterOptions.search;
+    if (search && search.inputEl) {
+      return search.inputEl;
+    }
+
+    return view.containerEl.querySelector('input[type="search"]');
   }
 
   nodeList(renderer) {
@@ -80,10 +84,22 @@ module.exports = class GraphTypeToSearch extends Plugin {
     return Array.isArray(raw) ? raw : Object.values(raw);
   }
 
+  titleOf(node) {
+    if (node.text && node.text.text) {
+      return String(node.text.text);
+    }
+    let id = String(node.id || "").replace(/\.md$/i, "");
+    const slash = id.lastIndexOf("/");
+    return slash >= 0 ? id.slice(slash + 1) : id;
+  }
+
+  ringColorInt() {
+    const n = parseInt(String(this.settings.ringColor).replace("#", ""), 16);
+    return Number.isNaN(n) ? 0xff5582 : n;
+  }
+
   // ----- focus handling -----
 
-  // Keep the bar focused while a graph is active so the OS IME composes into a
-  // real, focused, visible input.
   focusActiveGraph() {
     const activeLeaf = this.app.workspace.activeLeaf;
     if (!activeLeaf || !this.activeTypes().includes(activeLeaf.view.getViewType())) {
@@ -138,16 +154,14 @@ module.exports = class GraphTypeToSearch extends Plugin {
     }
 
     // Visible, focusable bar pinned to the top-left. Hosts native text entry
-    // (including IME composition) and shows the current highlight query.
+    // (including IME composition) and shows the current query.
     const bar = view.containerEl.createEl("input", { cls: "gtts-bar", type: "text" });
     bar.placeholder = "Type to highlight…";
 
-    const state = { bar, query: "", onBarInput: null };
+    const state = { bar, q: "", onBarInput: null };
     state.onBarInput = () => {
-      state.query = bar.value.trim().toLowerCase();
-      if (!state.query) {
-        this.restoreView(view);
-      }
+      state.q = bar.value;
+      this.applyFilter(view, state);
     };
     bar.addEventListener("input", state.onBarInput);
 
@@ -160,73 +174,190 @@ module.exports = class GraphTypeToSearch extends Plugin {
       return;
     }
 
-    this.restoreView(view);
+    this.applyFilter(view, { q: "" });   // clear any built-in filter we set
     state.bar.removeEventListener("input", state.onBarInput);
     state.bar.remove();
-
     this.states.delete(view);
+    this.clearLayer(view);
   }
 
-  // ----- highlight engine -----
+  // ----- filtering (optional) -----
 
-  tick() {
+  // In the default mode the query is pushed into the graph's built-in search so
+  // non-matching nodes are hidden. When "keep nodes visible" is on we keep the
+  // built-in search empty and rely on the ring alone.
+  applyFilter(view, state) {
+    const real = this.searchInputOf(view);
+    if (!real) {
+      return;
+    }
+
+    const target = this.settings.keepNodesVisible ? "" : state.q;
+    if (real.value !== target) {
+      real.value = target;
+      real.dispatchEvent(new Event("input"));
+    }
+  }
+
+  reapplyFilter() {
     for (const [view, state] of this.states) {
-      if (state.query) {
-        this.applyView(view, state.query);
+      this.applyFilter(view, state);
+    }
+  }
+
+  // ----- highlight rings (drawn into the renderer, same approach as Graph Unread Highlight) -----
+
+  startLoop() {
+    const step = () => {
+      this.syncRings();
+      this._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+
+  stopLoop() {
+    if (this._raf) {
+      cancelAnimationFrame(this._raf);
+      this._raf = 0;
+    }
+  }
+
+  nodeRadius(node) {
+    const w = node && node.circle && node.circle.width;
+    return w ? w / 2 : 8;
+  }
+
+  // Hollow ring (no fill) sized just outside the node, so even tiny nodes stay
+  // visible through it and node colors / color groups are untouched.
+  drawRing(g, R) {
+    const color = this.ringColorInt();
+    const w = this.settings.ringWidth;
+    g.clear();
+    if (this._hasV8) {
+      g.circle(0, 0, R).stroke({ width: w, color, alpha: 1 });
+    } else {
+      g.lineStyle(w, color, 1);
+      g.drawCircle(0, 0, R);
+    }
+  }
+
+  syncRings() {
+    try {
+      for (const [view, state] of this.states) {
+        const renderer = view.renderer;
+        const hanger = renderer && renderer.hanger;
+        if (!hanger) {
+          continue;
+        }
+
+        let layer = this.layers.get(view);
+        if (!layer) {
+          layer = { renderer, hanger, rings: new Map() };
+          this.layers.set(view, layer);
+        }
+        layer.renderer = renderer;
+        layer.hanger = hanger;
+
+        const list = this.nodeList(renderer);
+
+        // Reuse the same Graphics class as the existing node circles (matches
+        // the app's exact PIXI build, v6/v7 vs v8).
+        if (!this._GfxClass) {
+          const s = list.find((n) => n && n.circle && n.circle.constructor);
+          if (!s) {
+            continue;
+          }
+          this._GfxClass = s.circle.constructor;
+          this._hasV8 = typeof s.circle.circle === "function" && typeof s.circle.fill === "function";
+          try { hanger.sortableChildren = true; } catch (e) {}
+        }
+
+        const q = state.q.trim().toLowerCase();
+        const active = new Set();
+        let changed = false;
+
+        if (q) {
+          for (const node of list) {
+            if (!node || node.id == null) {
+              continue;
+            }
+            if (!this.titleOf(node).toLowerCase().includes(q)) {
+              continue;
+            }
+
+            let g = layer.rings.get(node.id);
+            if (!g) {
+              g = new this._GfxClass();
+              g.zIndex = 100000;
+              g._r = -1;
+              hanger.addChild(g);
+              layer.rings.set(node.id, g);
+              changed = true;
+            }
+            g.position.set(node.x, node.y);
+            const R = this.nodeRadius(node) + this.settings.ringGap;
+            if (g._r !== R) {
+              this.drawRing(g, R);
+              g._r = R;
+            }
+            active.add(node.id);
+          }
+        }
+
+        for (const [id, g] of layer.rings) {
+          if (!active.has(id)) {
+            hanger.removeChild(g);
+            if (g.destroy) g.destroy();
+            layer.rings.delete(id);
+            changed = true;
+          }
+        }
+
+        if (changed && renderer.changed) {
+          renderer.changed();
+        }
+      }
+    } catch (e) {
+      if (!this._loggedErr) {
+        console.error("[GTTS] syncRings error:", e);
+        this._loggedErr = true;
       }
     }
   }
 
-  applyView(view, query) {
-    const renderer = view.renderer;
-    const color = this.colorInt();
-    let changed = false;
-
-    for (const node of this.nodeList(renderer)) {
-      const text = node && node.text;
-      if (!text) {
-        continue;
+  // Force a redraw of every ring next frame (after a color/size change).
+  redrawAllRings() {
+    for (const layer of this.layers.values()) {
+      for (const g of layer.rings.values()) {
+        g._r = -1;
       }
-      if (text._gttsOrig === undefined) {
-        text._gttsOrig = text.tint;
+      if (layer.renderer && layer.renderer.changed) {
+        layer.renderer.changed();
       }
-
-      const want = String(text.text || "").toLowerCase().includes(query) ? color : text._gttsOrig;
-      if (text.tint !== want) {
-        text.tint = want;
-        changed = true;
-      }
-    }
-
-    if (changed && renderer.changed) {
-      renderer.changed();
     }
   }
 
-  restoreView(view) {
-    const renderer = view.renderer;
-    let changed = false;
-
-    for (const node of this.nodeList(renderer)) {
-      const text = node && node.text;
-      if (!text || text._gttsOrig === undefined) {
-        continue;
-      }
-      if (text.tint !== text._gttsOrig) {
-        text.tint = text._gttsOrig;
-        changed = true;
-      }
-      delete text._gttsOrig;
+  clearLayer(view) {
+    const layer = this.layers.get(view);
+    if (!layer) {
+      return;
     }
-
-    if (changed && renderer.changed) {
-      renderer.changed();
+    for (const g of layer.rings.values()) {
+      if (layer.hanger) layer.hanger.removeChild(g);
+      if (g.destroy) g.destroy();
     }
+    layer.rings.clear();
+    if (layer.renderer && layer.renderer.changed) layer.renderer.changed();
+    this.layers.delete(view);
   }
 
   cleanupAll() {
+    this.stopLoop();
     for (const view of Array.from(this.states.keys())) {
       this.unpatchLeaf(view);
+    }
+    for (const view of Array.from(this.layers.keys())) {
+      this.clearLayer(view);
     }
   }
 };
@@ -242,18 +373,52 @@ class GTTSSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Highlight color")
-      .setDesc("Tint applied to the titles of nodes whose title matches the query.")
+      .setName("Ring color")
+      .setDesc("Color of the highlight ring drawn around nodes whose title matches the query.")
       .addColorPicker((c) =>
-        c.setValue(this.plugin.settings.highlightColor).onChange(async (v) => {
-          this.plugin.settings.highlightColor = v;
+        c.setValue(this.plugin.settings.ringColor).onChange(async (v) => {
+          this.plugin.settings.ringColor = v;
           await this.plugin.saveData(this.plugin.settings);
+          this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Ring gap")
+      .setDesc("How far the ring sits outside the node (graph units).")
+      .addSlider((s) =>
+        s.setLimits(0, 16, 1).setValue(this.plugin.settings.ringGap).setDynamicTooltip().onChange(async (v) => {
+          this.plugin.settings.ringGap = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Ring thickness")
+      .setDesc("Width of the ring stroke (graph units).")
+      .addSlider((s) =>
+        s.setLimits(1, 10, 0.5).setValue(this.plugin.settings.ringWidth).setDynamicTooltip().onChange(async (v) => {
+          this.plugin.settings.ringWidth = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Keep all nodes visible")
+      .setDesc("Don't hide non-matching nodes — keep the whole graph and only draw the ring on matches.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.keepNodesVisible).onChange(async (v) => {
+          this.plugin.settings.keepNodesVisible = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.reapplyFilter();
         })
       );
 
     new Setting(containerEl)
       .setName("Enable in local graph")
-      .setDesc("Also show the highlight bar and keep it focused in the local graph pane.")
+      .setDesc("Also show the bar and highlight in the local graph pane.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.enableInLocalGraph).onChange(async (v) => {
           this.plugin.settings.enableInLocalGraph = v;
