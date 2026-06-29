@@ -2,7 +2,7 @@
 
 An Obsidian plugin that brings **type-ahead search** to the **graph view**. Just start typing while the graph is focused — no need to press `Cmd/Ctrl+F` or click into a search box first. Matching nodes get a **highlight ring**, and by default the whole graph stays on screen so you keep the surrounding context (you can switch to filtering instead).
 
-![Matching nodes highlighted with a ring in the graph view](demo.png)
+![Matching nodes highlighted with a glow ring while the rest of the graph is dimmed](demo.png)
 
 ## Why this plugin exists
 
