@@ -1,6 +1,6 @@
 "use strict";
 
-const { Plugin, PluginSettingTab, Setting } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, Scope } = require("obsidian");
 
 const GRAPH_VIEW_TYPES = ["graph", "localgraph"];
 
@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = {
   pulse: true,                // gently animate the ring (breathing)
   dimNonMatches: true,        // fade non-matching nodes/labels so matches pop
   dimOpacity: 0.15,           // opacity of dimmed (non-matching) nodes
+  interceptCmdF: true,        // swallow Cmd/Ctrl+F so it focuses our bar instead of opening the native search
 };
 
 module.exports = class GraphTypeToSearch extends Plugin {
@@ -29,22 +30,61 @@ module.exports = class GraphTypeToSearch extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       this.patchAllGraphLeaves();
       this.focusActiveGraph();
+      this.updateScope();
       this.startLoop();
     });
     this.registerEvent(
-      this.app.workspace.on("layout-change", () => this.patchAllGraphLeaves())
+      this.app.workspace.on("layout-change", () => {
+        this.patchAllGraphLeaves();
+        this.updateScope();
+      })
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.patchAllGraphLeaves();
         this.focusActiveGraph();
+        this.updateScope();
       })
     );
 
     // After panning or clicking a node, hand keyboard focus back to the bar.
     this.registerDomEvent(document, "pointerup", (evt) => this.onPointerUp(evt));
 
+    // Intercept Cmd/Ctrl+F via Obsidian's keymap. A scope pushed onto the top of
+    // the keymap stack is consulted before the core "search" hotkey, so we can
+    // block it (return false) and focus our bar instead. We only keep the scope
+    // pushed while a graph pane is active.
+    this._scope = new Scope();
+    this._scope.register(["Mod"], "f", () => {
+      const view = this.activeGraphView();
+      if (view) {
+        this.focusBar(view);
+      }
+      return false;   // swallow the key so the native search/settings never opens
+    });
+    this._scopePushed = false;
+    this.register(() => this.popScope());
+
     this.register(() => this.cleanupAll());
+  }
+
+  // Push our Cmd+F scope only while a graph pane is the active leaf (and the
+  // interception is enabled), so the hotkey behaves normally everywhere else.
+  updateScope() {
+    const want = this.settings.interceptCmdF && !!this.activeGraphView();
+    if (want && !this._scopePushed) {
+      this.app.keymap.pushScope(this._scope);
+      this._scopePushed = true;
+    } else if (!want && this._scopePushed) {
+      this.popScope();
+    }
+  }
+
+  popScope() {
+    if (this._scopePushed) {
+      this.app.keymap.popScope(this._scope);
+      this._scopePushed = false;
+    }
   }
 
   onunload() {
@@ -105,13 +145,22 @@ module.exports = class GraphTypeToSearch extends Plugin {
 
   // ----- focus handling -----
 
-  focusActiveGraph() {
+  activeGraphView() {
     const activeLeaf = this.app.workspace.activeLeaf;
     if (!activeLeaf || !this.activeTypes().includes(activeLeaf.view.getViewType())) {
+      return null;
+    }
+
+    return activeLeaf.view;
+  }
+
+  focusActiveGraph() {
+    const view = this.activeGraphView();
+    if (!view) {
       return;
     }
 
-    this.focusBar(activeLeaf.view);
+    this.focusBar(view);
   }
 
   focusBar(view) {
@@ -128,7 +177,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
     if (!view) {
       return;
     }
-    if (evt.target.closest && evt.target.closest(".gtts-bar, .graph-controls")) {
+    if (evt.target.closest && evt.target.closest(".gtts-wrap, .graph-controls")) {
       return;
     }
 
@@ -159,18 +208,52 @@ module.exports = class GraphTypeToSearch extends Plugin {
     }
 
     // Visible, focusable bar pinned to the top-left. Hosts native text entry
-    // (including IME composition) and shows the current query.
-    const bar = view.containerEl.createEl("input", { cls: "gtts-bar", type: "text" });
+    // (including IME composition) and shows the current query. A clear (×)
+    // button sits at its right edge.
+    const wrap = view.containerEl.createDiv({ cls: "gtts-wrap" });
+    const bar = wrap.createEl("input", { cls: "gtts-bar", type: "text" });
     bar.placeholder = "Type to highlight…";
+    const clearBtn = wrap.createEl("div", { cls: "gtts-clear", text: "×" });
+    clearBtn.setAttribute("aria-label", "Clear search");
 
-    const state = { bar, q: "", onBarInput: null };
+    const state = { wrap, bar, clearBtn, q: "", onBarInput: null, onBarKeyDown: null, onClearDown: null };
     state.onBarInput = () => {
       state.q = bar.value;
       this.applyFilter(view, state);
+      this.updateClearVisibility(state);
+    };
+    state.onBarKeyDown = (evt) => {
+      if (evt.key !== "Escape") {
+        return;
+      }
+
+      evt.preventDefault();
+      evt.stopPropagation();
+      this.clearQuery(view, state);
+    };
+    // pointerdown (not click) so focus stays put and onPointerUp keeps the bar focused.
+    state.onClearDown = (evt) => {
+      evt.preventDefault();
+      this.clearQuery(view, state);
     };
     bar.addEventListener("input", state.onBarInput);
+    bar.addEventListener("keydown", state.onBarKeyDown);
+    clearBtn.addEventListener("pointerdown", state.onClearDown);
 
     this.states.set(view, state);
+  }
+
+  // Wipe the query in both the bar and the built-in filter, then refocus the bar.
+  clearQuery(view, state) {
+    state.bar.value = "";
+    state.q = "";
+    this.applyFilter(view, state);
+    this.updateClearVisibility(state);
+    state.bar.focus({ preventScroll: true });
+  }
+
+  updateClearVisibility(state) {
+    state.clearBtn.toggleClass("gtts-clear--show", state.bar.value.length > 0);
   }
 
   unpatchLeaf(view) {
@@ -181,7 +264,9 @@ module.exports = class GraphTypeToSearch extends Plugin {
 
     this.applyFilter(view, { q: "" });   // clear any built-in filter we set
     state.bar.removeEventListener("input", state.onBarInput);
-    state.bar.remove();
+    state.bar.removeEventListener("keydown", state.onBarKeyDown);
+    state.clearBtn.removeEventListener("pointerdown", state.onClearDown);
+    state.wrap.remove();
     this.states.delete(view);
     this.clearLayer(view);
   }
@@ -609,6 +694,17 @@ class GTTSSettingTab extends PluginSettingTab {
           this.plugin.settings.keepNodesVisible = v;
           await this.plugin.saveData(this.plugin.settings);
           this.plugin.reapplyFilter();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Intercept Cmd/Ctrl+F")
+      .setDesc("Capture Cmd/Ctrl+F inside the graph pane to focus this bar instead of opening the native search.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.interceptCmdF).onChange(async (v) => {
+          this.plugin.settings.interceptCmdF = v;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.updateScope();
         })
       );
 
