@@ -19,7 +19,6 @@ module.exports = class GraphTypeToSearch extends Plugin {
     this.states = new Map();   // graph view -> { bar, q, onBarInput }
     this.layers = new Map();   // graph view -> { renderer, hanger, rings: Map(id -> Graphics) }
     this._raf = 0;
-    this._fontBase = 0;        // last seen zoom-based label font size of a non-matching node
 
     this.addSettingTab(new GTTSSettingTab(this.app, this));
 
@@ -277,17 +276,10 @@ module.exports = class GraphTypeToSearch extends Plugin {
         const q = state.q.trim().toLowerCase();
         const matches = (node) => q && node && node.id != null && this.titleOf(node).toLowerCase().includes(q);
 
-        // The renderer recomputes every label's font size on zoom (but not each
-        // frame). Read that base from a node we are NOT enlarging, then bump the
-        // matching labels' font size — text.scale gets clobbered by the renderer,
-        // font size does not.
+        // We enlarge a matching label by bumping its font size — text.scale gets
+        // clobbered by the renderer every frame, font size does not (the renderer
+        // only recomputes it on zoom).
         const scale = this.settings.labelScale;
-        if (scale !== 1) {
-          const ref = list.find((n) => n && n.text && n.text.style && !matches(n));
-          if (ref) {
-            this._fontBase = ref.text.style.fontSize;
-          }
-        }
 
         const active = new Set();
         let changed = false;
@@ -314,11 +306,19 @@ module.exports = class GraphTypeToSearch extends Plugin {
               this.drawRing(g, R);
               g._r = R;
             }
-            if (scale !== 1 && node.text && node.text.style && this._fontBase) {
-              const target = this._fontBase * scale;
-              if (Math.abs((node.text.style.fontSize || 0) - target) > 0.01) {
-                node.text.style.fontSize = target;
-                node.text._gttsFont = target;
+            if (scale !== 1 && node.text && node.text.style) {
+              const t = node.text;
+              const cur = t.style.fontSize || 0;
+              // When the size isn't our last applied value, the renderer has
+              // (re)set the natural size (e.g. on zoom) — recapture it so the
+              // multiplier stays proportional to each node's own label.
+              if (t._gttsFont === undefined || Math.abs(cur - t._gttsFont) > 0.01) {
+                t._gttsNatural = cur;
+              }
+              const target = t._gttsNatural * scale;
+              if (Math.abs(cur - target) > 0.01) {
+                t.style.fontSize = target;
+                t._gttsFont = target;
                 changed = true;
               }
             }
@@ -348,16 +348,17 @@ module.exports = class GraphTypeToSearch extends Plugin {
     }
   }
 
-  // Restore a node label we enlarged back to the renderer's base font size.
+  // Restore a node label we enlarged. Rather than guessing the previous size
+  // (which drifts with zoom), flag the node so the renderer recomputes its
+  // natural font size on the next render.
   unscaleText(node) {
     const text = node && node.text;
     if (!text || text._gttsFont === undefined) {
       return;
     }
-    if (this._fontBase && text.style) {
-      text.style.fontSize = this._fontBase;
-    }
+    node.fontDirty = true;
     delete text._gttsFont;
+    delete text._gttsNatural;
   }
 
   // Reset every enlarged label (used when the size multiplier returns to 1).
