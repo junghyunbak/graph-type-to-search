@@ -1,7 +1,7 @@
 {
   "id": "graph-type-to-search",
   "name": "Graph Type to Search",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "Type-ahead in the graph view: start typing while the graph is focused to filter, and draw a highlight ring around nodes whose title matches. Optionally keep every node visible and only ring the matches.",
   "author": "Jeonghyeon Park",

@@ -1,29 +1,61 @@
 /* Always-present filter bar pinned to the graph's top-left corner. It is a
    real, visible, focusable input so native (IME) composition shows its caret
-   and in-progress text right here, where the query lives. */
-.gtts-bar {
+   and in-progress text right here, where the query lives. The wrapper hosts the
+   input plus a clear (×) button at its right edge. */
+.gtts-wrap {
   position: absolute;
   top: 8px;
   left: 8px;
   z-index: 10;
   width: 180px;
   max-width: 60%;
-  padding: 4px 9px;
+  opacity: 0.85;
+}
+
+.gtts-wrap:hover,
+.gtts-wrap:focus-within {
+  opacity: 1;
+}
+
+.gtts-bar {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 26px 4px 9px;
   font-size: 12px;
   line-height: 1.4;
   border-radius: 6px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   color: var(--text-normal);
-  opacity: 0.85;
-}
-
-.gtts-bar:hover {
-  opacity: 1;
 }
 
 .gtts-bar:focus {
-  opacity: 1;
   outline: none;
   border-color: var(--interactive-accent);
+}
+
+/* Clear button — hidden until there's text to clear. */
+.gtts-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: none;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  font-size: 15px;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.gtts-clear:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.gtts-clear--show {
+  display: block;
 }
