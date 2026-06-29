@@ -403,15 +403,20 @@ module.exports = class GraphTypeToSearch extends Plugin {
   setNodeAlpha(node, a) {
     let changed = false;
     // The node circle is drawn from node.color.a in the renderer's batched mesh
-    // (its Graphics.alpha / fadeAlpha don't affect the draw). The label is a real
-    // Text object, so its own alpha works.
+    // (its Graphics.alpha / fadeAlpha don't affect the draw).
     if (node.color && node.color.a !== a) {
       node.color.a = a;
       changed = true;
     }
-    if (node.text && node.text.alpha !== a) {
-      node.text.alpha = a;
-      changed = true;
+    // The label's own .alpha is overwritten every frame by the renderer's zoom
+    // fade, so dimming it that way doesn't stick. Tinting it toward black
+    // (a multiply the renderer leaves alone) is what actually fades the label.
+    if (node.text) {
+      const tint = a >= 1 ? 0xffffff : this.grayTint(a);
+      if (node.text.tint !== tint) {
+        node.text.tint = tint;
+        changed = true;
+      }
     }
     if (a < 1) {
       node._gttsDimmed = true;
@@ -419,6 +424,11 @@ module.exports = class GraphTypeToSearch extends Plugin {
       delete node._gttsDimmed;
     }
     return changed;
+  }
+
+  grayTint(a) {
+    const v = Math.max(0, Math.min(255, Math.round(255 * a)));
+    return (v << 16) | (v << 8) | v;
   }
 
   // Restore full opacity to every node we dimmed. Returns true if anything changed.
