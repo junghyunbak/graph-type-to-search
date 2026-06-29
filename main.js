@@ -6,10 +6,11 @@ const GRAPH_VIEW_TYPES = ["graph", "localgraph"];
 
 const DEFAULT_SETTINGS = {
   enableInLocalGraph: true,   // also show the bar in the local graph pane
-  keepNodesVisible: false,    // when true, don't filter — keep every node and only ring matches
+  keepNodesVisible: true,     // when true, don't filter — keep every node and only ring matches
   ringColor: "#ff5582",       // color of the highlight ring on matching nodes
   ringGap: 4,                 // extra radius beyond the node (graph units)
   ringWidth: 4,               // ring stroke thickness (graph units)
+  labelScale: 1,              // size multiplier for matching node titles (1 = no change)
 };
 
 module.exports = class GraphTypeToSearch extends Plugin {
@@ -18,6 +19,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
     this.states = new Map();   // graph view -> { bar, q, onBarInput }
     this.layers = new Map();   // graph view -> { renderer, hanger, rings: Map(id -> Graphics) }
     this._raf = 0;
+    this._labelBase = 1;       // last seen zoom-based label scale of a non-matching node
 
     this.addSettingTab(new GTTSSettingTab(this.app, this));
 
@@ -273,15 +275,24 @@ module.exports = class GraphTypeToSearch extends Plugin {
         }
 
         const q = state.q.trim().toLowerCase();
+        const matches = (node) => q && node && node.id != null && this.titleOf(node).toLowerCase().includes(q);
+
+        // The renderer scales every label uniformly with zoom; read that base
+        // from a node we are NOT enlarging so our multiplier stays relative.
+        const scale = this.settings.labelScale;
+        if (scale !== 1) {
+          const ref = list.find((n) => n && n.text && !matches(n));
+          if (ref) {
+            this._labelBase = ref.text.scale.x;
+          }
+        }
+
         const active = new Set();
         let changed = false;
 
         if (q) {
           for (const node of list) {
-            if (!node || node.id == null) {
-              continue;
-            }
-            if (!this.titleOf(node).toLowerCase().includes(q)) {
+            if (!matches(node)) {
               continue;
             }
 
@@ -294,11 +305,20 @@ module.exports = class GraphTypeToSearch extends Plugin {
               layer.rings.set(node.id, g);
               changed = true;
             }
+            g._node = node;
             g.position.set(node.x, node.y);
             const R = this.nodeRadius(node) + this.settings.ringGap;
             if (g._r !== R) {
               this.drawRing(g, R);
               g._r = R;
+            }
+            if (scale !== 1 && node.text) {
+              const s = this._labelBase * scale;
+              if (node.text._gttsScale !== s) {
+                node.text.scale.set(s);
+                node.text._gttsScale = s;
+                changed = true;
+              }
             }
             active.add(node.id);
           }
@@ -306,6 +326,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
 
         for (const [id, g] of layer.rings) {
           if (!active.has(id)) {
+            this.unscaleText(g._node);
             hanger.removeChild(g);
             if (g.destroy) g.destroy();
             layer.rings.delete(id);
@@ -321,6 +342,32 @@ module.exports = class GraphTypeToSearch extends Plugin {
       if (!this._loggedErr) {
         console.error("[GTTS] syncRings error:", e);
         this._loggedErr = true;
+      }
+    }
+  }
+
+  // Restore a node label we enlarged back to the renderer's base scale.
+  unscaleText(node) {
+    const text = node && node.text;
+    if (!text || text._gttsScale === undefined) {
+      return;
+    }
+    text.scale.set(this._labelBase || 1);
+    delete text._gttsScale;
+  }
+
+  // Reset every enlarged label (used when the size multiplier returns to 1).
+  resetAllScales() {
+    for (const view of this.states.keys()) {
+      let changed = false;
+      for (const node of this.nodeList(view.renderer)) {
+        if (node && node.text && node.text._gttsScale !== undefined) {
+          this.unscaleText(node);
+          changed = true;
+        }
+      }
+      if (changed && view.renderer && view.renderer.changed) {
+        view.renderer.changed();
       }
     }
   }
@@ -343,6 +390,7 @@ module.exports = class GraphTypeToSearch extends Plugin {
       return;
     }
     for (const g of layer.rings.values()) {
+      this.unscaleText(g._node);
       if (layer.hanger) layer.hanger.removeChild(g);
       if (g.destroy) g.destroy();
     }
@@ -402,6 +450,19 @@ class GTTSSettingTab extends PluginSettingTab {
           this.plugin.settings.ringWidth = v;
           await this.plugin.saveData(this.plugin.settings);
           this.plugin.redrawAllRings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Highlighted label size")
+      .setDesc("Size multiplier for the titles of matching nodes (1.0 = no change).")
+      .addSlider((s) =>
+        s.setLimits(1, 3, 0.1).setValue(this.plugin.settings.labelScale).setDynamicTooltip().onChange(async (v) => {
+          this.plugin.settings.labelScale = v;
+          await this.plugin.saveData(this.plugin.settings);
+          if (v === 1) {
+            this.plugin.resetAllScales();
+          }
         })
       );
 
