@@ -10,17 +10,16 @@ This plugin removes that step. While a graph pane is focused, the first printabl
 
 ## How it works
 
-The plugin listens for `keydown` while a graph (or local graph) pane is focused. When you press a printable character — and you're **not** already typing in some other input — it:
+The plugin listens for `keydown` while a graph (or local graph) pane is focused. When you press a printable character — and you're **not** already typing in some other input — it edits the graph's built-in **"Search files…"** query directly and fires the input event so the graph's normal **live filter** kicks in. **Backspace** deletes from the query the same way.
 
-1. focuses the graph's built-in **"Search files…"** box,
-2. appends the character you typed, and
-3. fires the input event so the graph's normal **live filter** kicks in.
+It writes straight to the query rather than relying on the box having focus, so it keeps working even when the graph **controls panel is collapsed** (where the search box can't be focused). It uses the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched. Modifier combos (`Cmd`, `Ctrl`, `Alt`) are ignored so shortcuts still work.
 
-It uses the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched. Modifier combos (`Cmd`, `Ctrl`, `Alt`) are ignored so shortcuts still work.
+The active query is also shown in a small pill in the **top-left** of the graph, so you can see what's filtering the view at a glance — even with the controls panel collapsed.
 
 ## Settings
 
 - **Enable in local graph** — also start type-ahead search when the local graph pane is focused (on by default).
+- **Show current query** — display the active search query in the top-left corner of the graph (on by default).
 
 ## Notes
 
