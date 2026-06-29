@@ -1,0 +1,43 @@
+name: Release Obsidian plugin
+
+# Build provenance: when a version tag is pushed, this workflow attests the
+# release assets (proving they come from this repo at this commit) and then
+# publishes them to a GitHub release. The plugin has no build step — main.js,
+# manifest.json and styles.css are committed directly — so the attestation
+# covers those files exactly as checked out.
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write       # create the release and upload assets
+  id-token: write       # required by the attestation action (OIDC)
+  attestations: write   # write the attestation to the repo's store
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate artifact attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      - name: Create GitHub release with assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            main.js manifest.json styles.css

@@ -1,0 +1,3 @@
+/* Graph Type to Search has no visual styling of its own — it only routes
+   keystrokes into the graph view's built-in search box. This file exists so
+   the release workflow always has a styles.css asset to publish. */

@@ -1,0 +1,10 @@
+{
+  "id": "graph-type-to-search",
+  "name": "Graph Type to Search",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Type-ahead search in the graph view: just start typing while the graph is focused and the filter runs instantly — no Cmd/Ctrl+F needed.",
+  "author": "Jeonghyeon Park",
+  "authorUrl": "https://github.com/junghyunbak",
+  "isDesktopOnly": true
+}
