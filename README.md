@@ -10,9 +10,11 @@ This plugin removes that step. While a graph pane is focused, the first printabl
 
 ## How it works
 
-The plugin listens for `keydown` while a graph (or local graph) pane is focused. When you press a printable character — and you're **not** already typing in some other input — it edits the graph's built-in **"Search files…"** query directly and fires the input event so the graph's normal **live filter** kicks in. **Backspace** deletes from the query the same way.
+While a graph (or local graph) pane is active, the plugin keeps a tiny **hidden, focusable input** focused for you. Anything you type — including **IME composition for Hangul / CJK**, Backspace, and text selection — is entered natively into that input, and its value is mirrored into the graph's built-in **"Search files…"** query, firing the input event so the graph's normal **live filter** kicks in.
 
-It writes straight to the query rather than relying on the box having focus, so it keeps working even when the graph **controls panel is collapsed** (where the search box can't be focused). It uses the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched. Modifier combos (`Cmd`, `Ctrl`, `Alt`) are ignored so shortcuts still work.
+Using a real focused input (rather than injecting individual keystrokes) is what makes **Korean and other IME input compose correctly** — you can't redirect a composition that began while another element had focus, so the host input must already be focused before you type. It also means the search box itself never needs to be focusable, so this keeps working with the graph **controls panel collapsed**. After you pan or click in the graph, focus is handed back to the hidden input on pointer-up so the next keystroke goes straight to search.
+
+It mirrors into the graph view's own search component (`dataEngine.filterOptions.search`), so filtering behaves exactly like typing into the box by hand — your color groups, filters and display settings are untouched.
 
 The active query is also shown in a small pill in the **top-left** of the graph, so you can see what's filtering the view at a glance — even with the controls panel collapsed.
 
