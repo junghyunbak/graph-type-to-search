@@ -74,6 +74,20 @@ module.exports = class GraphTypeToSearch extends Plugin {
   updateScope() {
     const want = this.settings.interceptCmdF && !!this.activeGraphView();
     if (want && !this._scopePushed) {
+      // Only push from the keymap's resting scope. If a transient scope (an open
+      // settings modal, menu, popover, …) is currently active, pushing on top of
+      // it makes our scope active in its place — which swallows that scope's keys
+      // (Esc, Cmd+,, …) and leaves the keymap stack inconsistent when it later
+      // pops (its popScope no longer finds it on top). This is exactly what broke
+      // when the plugin was enabled at runtime: onLayoutReady fires synchronously
+      // during onload while the Community Plugins modal is still the active scope.
+      // We re-run updateScope on graph interaction, so the scope still engages
+      // once that modal closes.
+      const active = this.app.keymap.scope;
+      if (active !== this.app.scope && active !== this.app.keymap.rootScope) {
+        return;
+      }
+
       this.app.keymap.pushScope(this._scope);
       this._scopePushed = true;
     } else if (!want && this._scopePushed) {
@@ -182,6 +196,10 @@ module.exports = class GraphTypeToSearch extends Plugin {
       return;
     }
 
+    // Engage the Cmd+F scope here too: if it was skipped earlier because a modal
+    // was the active scope (e.g. enabling the plugin at runtime), interacting with
+    // the graph now — with the keymap back at rest — is when it can safely push.
+    this.updateScope();
     this.focusBar(view);
   }
 
