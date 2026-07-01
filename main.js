@@ -83,8 +83,18 @@ module.exports = class GraphTypeToSearch extends Plugin {
       // during onload while the Community Plugins modal is still the active scope.
       // We re-run updateScope on graph interaction, so the scope still engages
       // once that modal closes.
+      //
+      // The resting scope is the workspace scope: Obsidian pushes it once at
+      // startup and never pops it, so app.keymap.scope === app.workspace.scope
+      // whenever no modal/menu is open. (app.scope / rootScope are its ancestors,
+      // kept here only as harmless fallbacks for older builds.)
       const active = this.app.keymap.scope;
-      if (active !== this.app.scope && active !== this.app.keymap.rootScope) {
+      const resting = [
+        this.app.workspace.scope,
+        this.app.scope,
+        this.app.keymap.rootScope,
+      ];
+      if (!resting.includes(active)) {
         return;
       }
 
