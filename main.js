@@ -516,10 +516,33 @@ module.exports = class GraphTypeToSearch extends Plugin {
   // overwrite these, unlike fadeAlpha). Returns true if anything changed.
   setNodeAlpha(node, a) {
     let changed = false;
-    // The node circle is drawn from node.color.a in the renderer's batched mesh
-    // (its Graphics.alpha / fadeAlpha don't affect the draw).
-    if (node.color && node.color.a !== a) {
-      node.color.a = a;
+    // Never mutate a color object we don't own. Obsidian SHARES one color object
+    // per color group (and one default fill for ungrouped nodes), so dimming it
+    // in place dims every node of that group -- matches included. To dim, give
+    // the node a private copy; to restore, hand back the original reference.
+    if (a < 1) {
+      if (!node._gttsOwnColor || node.color !== node._gttsOwnColor) {
+        const orig = node.color;
+        const src = orig || (typeof node.getFillColor === "function" ? node.getFillColor() : null);
+        if (src && typeof src.rgb === "number") {
+          node._gttsOrigColor = orig || null;
+          node._gttsOwnColor = { a, rgb: src.rgb };
+          node.color = node._gttsOwnColor;
+          changed = true;
+        }
+      }
+      // The node circle is drawn from node.color.a in the renderer's batched mesh
+      // (its Graphics.alpha / fadeAlpha don't affect the draw).
+      if (node._gttsOwnColor && node._gttsOwnColor.a !== a) {
+        node._gttsOwnColor.a = a;
+        changed = true;
+      }
+    } else if (node._gttsOwnColor) {
+      if (node.color === node._gttsOwnColor) {
+        node.color = node._gttsOrigColor || null;
+      }
+      delete node._gttsOwnColor;
+      delete node._gttsOrigColor;
       changed = true;
     }
     // The label's own .alpha is overwritten every frame by the renderer's zoom
